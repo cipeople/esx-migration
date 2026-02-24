@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ESXi VM Migration — cipeople</title>
+<style>
+  body { font-family: Georgia, serif; color: #111; max-width: 680px; margin: 60px auto; padding: 0 24px; line-height: 1.6; }
+  h1 { font-size: 28px; margin-bottom: 8px; }
+  .sub { color: #555; font-size: 15px; margin-bottom: 40px; }
+  .links { display: flex; flex-direction: column; gap: 16px; }
+  .link-card { border: 1px solid #ddd; border-radius: 6px; padding: 18px 22px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s; }
+  .link-card:hover { border-color: #999; }
+  .link-card .title { font-size: 17px; font-weight: bold; color: #0645ad; margin-bottom: 4px; }
+  .link-card .desc { font-size: 13px; color: #555; }
+  .link-card.paid .title { color: #5a4200; }
+  .link-card.paid { background: #fffbea; border-color: #e6c84a; }
+  footer { margin-top: 48px; font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 16px; }
+</style>
+</head>
+<body>
+<h1>ESXi VM Migration</h1>
+<p class="sub">Or how I learned to stop worrying and check my NFS config. Real hardware, real benchmarks, one config mistake that cost $350.</p>
+
+<div class="links">
+  <a class="link-card" href="esxi-migration-guide.html">
+    <div class="title">📄 Migration Guide</div>
+    <div class="desc">The full article — NFS sync trap, 16-run benchmark matrix, step-by-step guide, troubleshooting checklist.</div>
+  </a>
+  <a class="link-card" href="benchmark-results.html">
+    <div class="title">📊 Benchmark Charts</div>
+    <div class="desc">Interactive charts — full matrix, sync penalty multipliers, source IOPS vs wire throughput.</div>
+  </a>
+  <a class="link-card paid" href="https://vladster601.gumroad.com/l/selpp">
+    <div class="title">💰 Advanced Deep Dive — $9</div>
+    <div class="desc">tmpfs as migration target, fan-out parallelism, vmkfstools ceiling, iSCSI over NVMe RAID0, raw NVMe baselines.</div>
+  </a>
+</div>
+
+<footer>
+  <a href="https://github.com/cipeople/esx-migration">GitHub</a> ·
+  CC BY 4.0 · vlad [at] cipeople [dot] com
+</footer>
+</body>
+</html>
