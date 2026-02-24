@@ -1,0 +1,166 @@
+/* esxi-migration.css — shared styles for guide and advanced article */
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  color: #111;
+  line-height: 1.45;
+  max-width: 980px;
+  margin: 40px auto;
+  padding: 0 18px;
+}
+
+h1 { font-size: 32px; margin: 0 0 16px 0; }
+h2 { margin-top: 28px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
+h3 { margin-top: 20px; }
+
+pre {
+  background: #0b0f14;
+  color: #e6edf3;
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+blockquote {
+  border-left: 4px solid #333;
+  background: #f6f6f6;
+  padding: 10px 14px;
+  margin: 14px 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 14px 0;
+  font-size: 13px;
+}
+
+th, td { border: 1px solid #ddd; padding: 8px 9px; vertical-align: top; }
+th     { background: #f2f2f2; text-align: left; }
+
+a   { color: #0645ad; text-decoration: none; }
+hr  { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
+
+/* ── Conclusion / callout box ───────────────────────────────────────────── */
+/*
+   Light amber background — standard pattern for "important note" callouts
+   (used by GitHub, MDN, Notion). Dark text on light background ensures
+   readability regardless of whether the reader has dark mode or
+   high-contrast overrides at OS level.
+   Border-left accent provides visual hierarchy without relying on color alone.
+*/
+.conclusion {
+  margin-top: 40px;
+  background: #fffbea;
+  border: 1px solid #e6c84a;
+  border-left: 5px solid #c9a800;
+  border-radius: 4px;
+  padding: 24px 28px;
+  color: #111;
+}
+
+.conclusion h2 {
+  color: #5a4200;
+  border-bottom: 1px solid #e6c84a;
+  margin-top: 0;
+  padding-bottom: 10px;
+  font-size: 20px;
+}
+
+.conclusion p {
+  color: #222;
+  margin: 12px 0;
+}
+
+.conclusion strong {
+  color: #111;
+}
+
+/* CTA blockquote inside conclusion — slightly warmer, still light */
+.conclusion blockquote {
+  border-left: 4px solid #c9a800;
+  background: #fff8d6;
+  color: #222;
+  margin: 20px 0 0;
+  padding: 12px 16px;
+  border-radius: 0 4px 4px 0;
+}
+
+.conclusion blockquote a {
+  color: #0645ad;
+  font-weight: bold;
+}
+
+/* ── Print / PDF ────────────────────────────────────────────────────────── */
+@media print {
+  body {
+    font-size: 11pt;
+    line-height: 1.5;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    color: #000;
+  }
+
+  /* No scrollbars — wrap instead */
+  pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow: visible;
+    font-size: 9pt;
+    border: 1px solid #ccc;
+    background: #f5f5f5 !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  code {
+    font-size: 9pt;
+  }
+
+  /* Never break inside these */
+  pre, blockquote, table, figure,
+  .conclusion {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep headings with the content that follows */
+  h1, h2, h3, h4 {
+    page-break-after: avoid;
+    break-after: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Never orphan the first row of a table */
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Break before major sections, not mid-content */
+  h2 {
+    page-break-before: auto;
+    break-before: auto;
+  }
+
+  /* Conclusion box — keep together, print background */
+  .conclusion {
+    background: #fffbea !important;
+    border: 1px solid #e6c84a !important;
+    border-left: 5px solid #c9a800 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Hide anything that makes no sense in print */
+  a[href]:after {
+    content: none !important;
+  }
+}

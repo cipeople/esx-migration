@@ -1,0 +1,1293 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>ESXi Migration Guide</title><link rel="stylesheet" href="esxi-migration.css"/></head><body><h1>ESXi Migration: Or How I Learned to Stop Worrying and Check My NFS Config</h1>
+
+<p><strong>TL;DR</strong>: I spent days thinking my HDD was too slow for ESXi VM migration. Turns out I just forgot to reload my NFS server config. Don't be like me. Also, benchmarks inside.</p>
+
+<blockquote>
+  <p><strong>Units:</strong> all sizes/speeds use binary units (powers of two). In this doc: 1 MB = 2^20 bytes, 1 GB = 2^30 bytes. (No marketing units.)</p>
+</blockquote>
+
+<p><strong>-> <a href="benchmark-results.html">Benchmark charts &amp; full data matrix</a></strong></p>
+
+<p><strong>-> <a href="esxi-migration-advanced.html">Advanced deep dive: full matrix, tmpfs experiments, vmkfstools ceiling, sync anomaly</a></strong></p>
+
+<hr />
+
+<h2>Why This Guide Exists (And Why You Can't Just dd Your Way Out)</h2>
+
+<p><strong>"Can't I just mount the VMFS volume on Linux and copy the files?"</strong></p>
+
+<p>No. Here's why you're stuck with this approach:</p>
+
+<h3>The Fundamental Problems</h3>
+
+<ol>
+<li><p><strong>No supported way to mount VMFS6 on Linux</strong></p>
+
+<ul>
+<li>VMware doesn't ship a Linux VMFS6 driver, and there's no in-kernel support</li>
+<li>Third-party projects exist (e.g., vmfs6-tools / vmfs-fuse), but they're typically <strong>read-only and fragile</strong> -- fine for last-ditch recovery, not a predictable migration runbook</li>
+</ul></li>
+<li><p><strong>ESXi won't use "normal Linux filesystems" as datastores</strong></p>
+
+<ul>
+<li>For datastores: <strong>VMFS</strong> (block) or <strong>NFS</strong> (file)</li>
+<li>Removable media is a different story (VFAT/FAT32; sometimes ext3 via CLI), but it's not a great place to park large VMs</li>
+</ul></li>
+<li><p><strong>Cloning the disk doesn't help</strong></p>
+
+<ul>
+<li><code>dd if=/dev/esxi-disk of=/dev/new-disk</code> copies the VMFS filesystem</li>
+<li>Linux still can't use it</li>
+<li>You're back to square one</li>
+</ul></li>
+<li><p><strong>Passthrough doesn't magically solve it</strong></p>
+
+<ul>
+<li>RDM / passthrough gives a Linux VM the block device</li>
+<li>You're still stuck at "how do I read VMFS6?"</li>
+</ul></li>
+</ol>
+
+<h3>The Practical Approach (If You Don't Have vCenter)</h3>
+
+<p><strong>Mount an NFS datastore on ESXi -> Use vmkfstools to copy VMDKs off VMFS</strong></p>
+
+<p>This works because:</p>
+
+<ul>
+<li>ESXi can read its own VMFS (obviously)</li>
+<li>ESXi can write to NFS shares</li>
+<li>vmkfstools runs inside ESXi and understands VMDK formats</li>
+<li>Linux can mount NFS and access the copied files</li>
+<li>You can then convert VMDK -> qcow2/raw on Linux with qemu-img</li>
+</ul>
+
+<p><strong>Alternative scenarios:</strong></p>
+
+<ul>
+<li><em>Fresh ESXi install from USB</em>: If you only have the datastore disk, boot ESXi from USB, add NFS storage, copy VMs out (no license needed for this)</li>
+<li><em>USB disk as scratch target</em>: Removable-media support on ESXi is limited (VFAT/FAT32; sometimes ext3 via CLI). It can work in a pinch, but it's awkward for large VM exports and not consistently supported -- NFS is usually simpler and faster.</li>
+<li><em>OVF/OVA export tools</em>: exist, but for bulk migration of hundreds of VMDKs they are not a sane automation surface. Stick to vmkfstools over an NFS datastore.</li>
+<li><em>vCenter with shared storage</em>: Use Storage vMotion (requires licenses you probably don't have)</li>
+<li><em>VMware Converter</em>: Requires Windows, vCenter, licenses, and still uses network transfer</li>
+<li><em>Starwind V2V</em>: Works but still requires mounting the VMFS somehow (catch-22*)</li>
+</ul>
+
+<p>* <em>Catch-22: A paradoxical situation where you need X to get Y, but need Y to get X. You need to mount VMFS to use V2V tools, but you need V2V tools to access VMFS without ESXi.</em></p>
+
+<h3>Why This Guide Matters</h3>
+
+<p>In practice, it's <code>vmkfstools</code> over NFS. The question is: <strong>do you want it to take 3 minutes or 3 hours per VM?</strong></p>
+
+<p>That's what this guide is about.</p>
+
+<hr />
+
+<h2>The Problem That Wasn't</h2>
+
+<p>I needed to migrate VMs off an ESXi host. Standard approach: mount an NFS datastore as the target, then use <code>vmkfstools</code> to copy VMDKs out of VMFS and onto the NFS share.</p>
+
+<p><strong>Expected speed</strong>: Maybe 100 MB/s?<br />
+<strong>Actual speed</strong>: 3-5 MB/s<br />
+<strong>My conclusion</strong>: "The HDD is dying from all these random reads"</p>
+
+<p>So I did what any reasonable person would do: ordered a 4TB SSD for $350, cloned the entire VMFS datastore to it, and prepared to write a guide about how SSDs are essential for ESXi migration.</p>
+
+<p>Spoiler: I'm an idiot.</p>
+
+<hr />
+
+<h2>The "Aha" Moment (That Took Too Long)</h2>
+
+<p>After getting the SSD and seeing great speeds (98 MB/s), I decided to benchmark the HDD one more time for comparison.</p>
+
+<p><strong>Result</strong>: 82 MB/s.</p>
+
+<p>Wait, what?</p>
+
+<p>Same HDD. Same VM. Same everything. Except now it was only 20% slower than the SSD, not 95% slower.</p>
+
+<p><strong>What changed?</strong></p>
+
+<p>I'd edited <code>/etc/exports</code> to use <code>async</code> mode for better performance... but I never ran <code>exportfs -ra</code> to reload the config. The NFS server was still running with <code>sync</code> mode from the previous config.</p>
+
+<hr />
+
+<h2>The Real Culprit: NFS Sync Mode</h2>
+
+<p>Here's what <code>sync</code> mode does:</p>
+
+<ul>
+<li>Every write must hit physical disk before acknowledging to the client</li>
+<li>No write caching, no buffering</li>
+<li>Safe for data integrity</li>
+<li><strong>Absolutely murders performance</strong></li>
+</ul>
+
+<p>Here's what <code>async</code> mode does:</p>
+
+<ul>
+<li>Writes are buffered in RAM and acknowledged immediately</li>
+<li>NFS can batch writes efficiently</li>
+<li>Less safe if you lose power mid-transfer</li>
+<li><strong>13-24x faster for bulk data transfer</strong> -- measured, not estimated</li>
+</ul>
+
+<p>The performance numbers, benchmarked across real hardware:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Configuration</th>
+  <th>Throughput</th>
+  <th>Time for 32 GB provisioned (~19 GB allocated, ~41% sparse)</th>
+  <th>Penalty</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD->HDD, 1G, NFS sync</td>
+  <td>6.5 MB/s</td>
+  <td>2h 49m 58s</td>
+  <td>baseline doom</td>
+</tr>
+<tr>
+  <td>HDD->HDD, 1G, NFS async</td>
+  <td>82.4 MB/s</td>
+  <td>4 minutes</td>
+  <td><strong>13x faster</strong></td>
+</tr>
+<tr>
+  <td>HDD->HDD, 25G, NFS sync</td>
+  <td>6.5 MB/s</td>
+  <td>2h 49m 49s</td>
+  <td>network irrelevant</td>
+</tr>
+<tr>
+  <td>HDD->HDD, 25G, NFS async</td>
+  <td>110.2 MB/s</td>
+  <td>3 minutes</td>
+  <td><strong>17x faster</strong></td>
+</tr>
+<tr>
+  <td>SSD->NVMe, 25G, NFS sync</td>
+  <td>12.3 MB/s</td>
+  <td>26m 21s</td>
+  <td>the cruelest joke</td>
+</tr>
+<tr>
+  <td>SSD->NVMe, 25G, NFS async</td>
+  <td>289.7 MB/s</td>
+  <td>67 seconds</td>
+  <td><strong>24x faster</strong></td>
+</tr>
+</tbody>
+</table>
+
+<p>The cruelest entry: SSD->NVMe over 25G with sync enabled. You bought all the right hardware, built the perfect stack -- and a single config option turns 290 MB/s into 12 MB/s. The sync penalty actually <em>grows</em> as your hardware gets faster, because there's more potential being wasted.</p>
+
+<p><strong>The lesson</strong>: Forgetting to run <code>exportfs -ra</code> cost me 13-24x in performance, not the HDD.</p>
+
+<hr />
+
+<h2>What I Actually Learned (With Benchmarks)</h2>
+
+<p><strong>-> <a href="benchmark-results.html">Full data matrix and isolated variable analysis</a></strong></p>
+
+<h3>Test Setup</h3>
+
+<p>The full matrix covers all combinations of source x destination x NIC speed x MTU -- 16 runs total, same VM each time -- 32 GB provisioned, ~19 GB allocated (~41% sparse). Folder naming tells you everything: <code>esxi_{src}_nfs_{dst}_{nic}_mtu{mtu}</code>.</p>
+
+<ul>
+<li><strong>Source</strong>: WD Gold WD4003FRYZ (HDD) · Samsung 870 QVO 4TB (SSD)</li>
+<li><strong>Destination</strong>: WD Gold RAID array (HDD) · KIOXIA Exceria Pro (NVMe)</li>
+<li><strong>NIC</strong>: onboard 1G · Intel XXV710-DA2 25G, direct DAC cable</li>
+<li><strong>MTU</strong>: 1500 (standard) · 9000 (jumbo), both tested at both speeds</li>
+<li><strong>VM</strong>: k8s_master.vmdk -- 32 GB provisioned, ~19 GB on-disk (<code>du</code>), ~41% sparse (≈1.68x thinness)
+<ul>
+<li>Note: throughput and "MB/s" figures are computed from the <strong>allocated</strong> bytes (~19 GB), because <code>vmkfstools -d thin</code> copies allocated blocks. If your disks are thick-provisioned, expect times to scale roughly with the <strong>provisioned</strong> size.</li>
+<li>How that was measured on Linux:<br />
+<div class="codehilite"><br />
+<pre><span></span><code>du<span class="w"> </span>-h<span class="w"> </span>k8s_master-flat.vmdk<span class="w">  </span><span class="c1"># ~19G on disk</span><br />
+du<span class="w"> </span>-h<span class="w"> </span>--apparent-size<span class="w"> </span>k8s_master-flat.vmdk<span class="w">  </span><span class="c1"># ~32G provisioned</span><br /><br />
+</code></pre><br /><br />
+</div></li>
+</ul></li>
+</ul>
+
+<h3>Full Results Matrix</h3>
+
+<table>
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Dest</th>
+  <th>NIC</th>
+  <th>MTU</th>
+  <th>Time</th>
+  <th>MB/s</th>
+  <th>vs base</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>1500</td>
+  <td>3m 56s</td>
+  <td>82.4</td>
+  <td>baseline</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>9000</td>
+  <td>3m 47s</td>
+  <td>85.7</td>
+  <td>1.0x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>NVMe</td>
+  <td>1G</td>
+  <td>1500</td>
+  <td>3m 54s</td>
+  <td>82.9</td>
+  <td>1.0x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>NVMe</td>
+  <td>1G</td>
+  <td>9000</td>
+  <td>3m 46s</td>
+  <td>85.8</td>
+  <td>1.0x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>1500</td>
+  <td>2m 56s</td>
+  <td>110.2</td>
+  <td>1.3x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>9000</td>
+  <td>2m 49s</td>
+  <td>114.5</td>
+  <td>1.4x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>NVMe</td>
+  <td>25G</td>
+  <td>1500</td>
+  <td>2m 38s</td>
+  <td>122.9</td>
+  <td>1.5x</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>NVMe</td>
+  <td>25G</td>
+  <td>9000</td>
+  <td>2m 32s</td>
+  <td>127.4</td>
+  <td>1.5x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>1500</td>
+  <td>3m 18s</td>
+  <td>98.1</td>
+  <td>1.2x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>9000</td>
+  <td>3m 09s</td>
+  <td>102.6</td>
+  <td>1.2x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>NVMe</td>
+  <td>1G</td>
+  <td>1500</td>
+  <td>3m 17s</td>
+  <td>98.6</td>
+  <td>1.2x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>NVMe</td>
+  <td>1G</td>
+  <td>9000</td>
+  <td>3m 08s</td>
+  <td>103.0</td>
+  <td>1.2x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>1500</td>
+  <td>2m 05s</td>
+  <td>155.1</td>
+  <td>1.9x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>9000</td>
+  <td>2m 03s</td>
+  <td>157.4</td>
+  <td>1.9x</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>NVMe</td>
+  <td>25G</td>
+  <td>1500</td>
+  <td>1m 08s</td>
+  <td>285.6</td>
+  <td>3.5x</td>
+</tr>
+<tr>
+  <td><strong>SSD</strong></td>
+  <td><strong>NVMe</strong></td>
+  <td><strong>25G</strong></td>
+  <td><strong>9000</strong></td>
+  <td><strong>1m 07s</strong></td>
+  <td><strong>289.7</strong></td>
+  <td><strong>3.5x</strong></td>
+</tr>
+</tbody>
+</table>
+
+<h3>What The Data Proves</h3>
+
+<p><strong>MTU 9000 vs 1500 -- the free lunch:</strong></p>
+
+<p>Consistent +3-4 MB/s absolute gain across every single combination. The percentage looks better on slower setups (~4% on 1G vs ~1.5% on 25G+NVMe) -- not because the lemon got juicier, just because the glass was smaller. Set it. It is free.</p>
+
+<p><strong>NVMe destination -- context is everything:</strong></p>
+
+<p>On 1G: NVMe vs HDD = +0.4 MB/s. That is not a rounding error, that is a wall called 1G. The ceiling does not care what is behind it. On 25G + SSD source: +130 MB/s, +84%. Completely different story. Do not upgrade the destination in isolation -- upgrade the full stack.</p>
+
+<p><strong>25G network -- the bigger the pipe, the more storage matters:</strong></p>
+
+<p>With HDD source, 25G buys ~30%. With SSD+NVMe, 25G is a 3x multiplier. The network upgrade does not help much with slow storage -- there is nothing to carry. But once the storage can actually feed it, the pipe pays off.</p>
+
+<p><strong>SSD source -- latency matters more than you think:</strong></p>
+
+<p>On 1G: SSD is 1.2x faster than HDD. Network is the wall, both drives can feed it easily. On 25G+NVMe: SSD is 2.3x faster. The SSD's 1.5ms read latency vs HDD's 9ms finally has room to matter -- vmkfstools pipelines better, the network stops being the lid, and everything accelerates together.</p>
+
+<p><strong>Upgrades multiply, not add:</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>Layer</th>
+  <th>Effect in isolation</th>
+  <th>Effect when full stack ready</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>async (vs sync)</td>
+  <td>13-24x -- always</td>
+  <td>13-24x -- always</td>
+</tr>
+<tr>
+  <td>MTU 9000</td>
+  <td>+4% everywhere</td>
+  <td>+4% everywhere</td>
+</tr>
+<tr>
+  <td>1G -> 25G</td>
+  <td>1.3x with HDD</td>
+  <td>2.9x with SSD+NVMe</td>
+</tr>
+<tr>
+  <td>HDD -> SSD source</td>
+  <td>1.2x on 1G</td>
+  <td>2.3x on 25G+NVMe</td>
+</tr>
+<tr>
+  <td>HDD -> NVMe dest</td>
+  <td>~0 on 1G</td>
+  <td>+84% with SSD+25G</td>
+</tr>
+</tbody>
+</table>
+
+<p>Stack all four: 82 -> 290 MB/s. 3.5x. These are 16 data points, not theory.</p>
+
+<h3>Source IOPS (ESXi esxtop SCSI counters)</h3>
+
+<p>You'll notice source read MB/s is consistently higher than the wire throughput MB/s in the table above. This is expected: <code>vmkfstools -d thin</code> scans the full provisioned range of the VMDK to find allocated blocks, but only transmits the allocated ones over the wire. For a ~41% sparse disk, ESXi reads ~32 GiB worth of blocks from the source device while only ~19 GiB travels over the network. Source IOPS reflect the scan; wire throughput reflects what was actually sent.</p>
+
+<table>
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Setup</th>
+  <th>Read IOPS</th>
+  <th>Read MB/s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD</td>
+  <td>1G MTU1500</td>
+  <td>2,206</td>
+  <td>138 MB/s</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>1G MTU9000</td>
+  <td>2,311</td>
+  <td>145 MB/s</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>25G (HDD dst)</td>
+  <td>2,955-3,044</td>
+  <td>185-190 MB/s</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>25G (NVMe dst)</td>
+  <td>3,238-3,349</td>
+  <td>202-209 MB/s</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>1G MTU1500</td>
+  <td>2,604</td>
+  <td>163 MB/s</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>1G MTU9000</td>
+  <td>2,751</td>
+  <td>172 MB/s</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>25G (HDD dst)</td>
+  <td>4,175-4,184</td>
+  <td>261-262 MB/s</td>
+</tr>
+<tr>
+  <td><strong>SSD</strong></td>
+  <td><strong>25G (NVMe dst)</strong></td>
+  <td><strong>7,164-7,693</strong></td>
+  <td><strong>448-481 MB/s</strong></td>
+</tr>
+</tbody>
+</table>
+
+<h3>Destination IOPS (Linux iostat)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>Dest</th>
+  <th>Source</th>
+  <th>Setup</th>
+  <th>Write IOPS</th>
+  <th>Write MB/s</th>
+  <th>%util</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>1,211</td>
+  <td>89 MB/s</td>
+  <td>2.0%</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>SSD</td>
+  <td>1G</td>
+  <td>1,375</td>
+  <td>101 MB/s</td>
+  <td>2.2%</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>414-443</td>
+  <td>120-128 MB/s</td>
+  <td>5-6%</td>
+</tr>
+<tr>
+  <td>HDD</td>
+  <td>SSD</td>
+  <td>25G</td>
+  <td>247-249</td>
+  <td>160 MB/s</td>
+  <td>~7%</td>
+</tr>
+<tr>
+  <td>NVMe</td>
+  <td>HDD</td>
+  <td>1G</td>
+  <td>1,434-1,468</td>
+  <td>90-92 MB/s</td>
+  <td>0.0%</td>
+</tr>
+<tr>
+  <td>NVMe</td>
+  <td>SSD</td>
+  <td>1G</td>
+  <td>1,617-1,707</td>
+  <td>101-107 MB/s</td>
+  <td>0.1%</td>
+</tr>
+<tr>
+  <td>NVMe</td>
+  <td>HDD</td>
+  <td>25G</td>
+  <td>2,157-2,237</td>
+  <td>138-143 MB/s</td>
+  <td>0.1%</td>
+</tr>
+<tr>
+  <td><strong>NVMe</strong></td>
+  <td><strong>SSD</strong></td>
+  <td><strong>25G</strong></td>
+  <td><strong>4,712-4,724</strong></td>
+  <td><strong>296 MB/s</strong></td>
+  <td><strong>0.2%</strong></td>
+</tr>
+</tbody>
+</table>
+
+<p>NVMe at 0.2% utilisation doing 4,700+ IOPS. It could run this workload 500 times over. It is not the bottleneck. It will never be the bottleneck.</p>
+
+<h2>Why The HDD Didn't Suck</h2>
+
+<p>My WD Gold is an enterprise drive designed for this kind of workload:</p>
+
+<ul>
+<li>7200 RPM (not slow consumer 5400 RPM)</li>
+<li>Large cache (256 MB)</li>
+<li>Firmware optimized for random I/O</li>
+<li>Rated for 24/7 datacenter use</li>
+</ul>
+
+<p>But more importantly, vmkfstools' read pattern isn't actually tiny random 4K reads:</p>
+
+<ul>
+<li>Average read size: ~64 KB chunks</li>
+<li>Sequential reads within each VMDK extent</li>
+<li>Read-ahead caching helps</li>
+<li>2,000+ IOPS is achievable on enterprise HDDs</li>
+</ul>
+
+<p><strong>Consumer desktop drives (WD Blue, Seagate Barracuda) would perform worse</strong> - probably 40-60 MB/s instead of 82 MB/s. But still infinitely better than 3-5 MB/s with sync mode.</p>
+
+<hr />
+
+<h2>The SSD Staging Approach (Still Valid, But Context Matters)</h2>
+
+<p>Even though the HDD performed OK, the SSD staging approach still has merit - but the reason depends on your network:</p>
+
+<h3>Why SSD staging makes sense on 1G:</h3>
+
+<ul>
+<li>19% faster (98 vs 82 MB/s) - modest but real</li>
+<li>Eliminates variables (consistent performance regardless of HDD quality)</li>
+<li>Consumer HDDs would show a bigger gap</li>
+</ul>
+
+<h3>Why SSD staging REALLY makes sense on 25G:</h3>
+
+<ul>
+<li><strong>129% faster</strong> when paired with NVMe destination (286 vs 125 MB/s)</li>
+<li>Source latency (1.5ms vs 9ms) becomes the critical factor</li>
+<li>HDD's 9ms latency limits pipelining the 25G link can handle</li>
+<li>The advantage scales dramatically with network speed</li>
+</ul>
+
+<h3>When you DON'T need SSD staging:</h3>
+
+<ul>
+<li>You have 1G network and enterprise HDDs (82 MB/s is fine for most migrations)</li>
+<li>Your migration window isn't tight</li>
+<li>You remembered to enable NFS async (check it twice!)</li>
+</ul>
+
+<h3>The upgrade decision matrix</h3>
+
+<table>
+<thead>
+<tr>
+  <th>Setup</th>
+  <th>Cost</th>
+  <th>MB/s</th>
+  <th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD + 1G async</td>
+  <td>$0</td>
+  <td>82</td>
+  <td>Good enough for most</td>
+</tr>
+<tr>
+  <td>SSD + 1G async</td>
+  <td>$350</td>
+  <td>98</td>
+  <td>+19%, network still limits</td>
+</tr>
+<tr>
+  <td>HDD + 25G async</td>
+  <td>~$200 NICs</td>
+  <td>114-125</td>
+  <td>Better, HDD latency limits</td>
+</tr>
+<tr>
+  <td>SSD + 25G + NVMe dest</td>
+  <td>~$550</td>
+  <td><strong>286</strong></td>
+  <td>3.5x baseline</td>
+</tr>
+<tr>
+  <td>Any + NFS <strong>sync</strong></td>
+  <td>$0</td>
+  <td>6-12</td>
+  <td><strong>Don't do this</strong></td>
+</tr>
+</tbody>
+</table>
+
+<hr />
+
+<h2>The Step-by-Step Guide (With All The Checks)</h2>
+
+<h3>Step 0: Don't Be Like Me</h3>
+
+<p>Before you do ANYTHING else, let's make sure NFS is configured correctly.</p>
+
+<h4>On your Linux NFS server:</h4>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Edit /etc/exports - USE ASYNC NOT SYNC</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span>/etc/exports<span class="w"> </span><span class="s">&lt;&lt; &#39;EOF&#39;</span>
+<span class="s">/mnt/raid/esxi-import 192.168.0.0/24(rw,async,no_root_squash,no_subtree_check)</span>
+<span class="s">EOF</span>
+
+<span class="c1"># CRITICAL: Actually reload the config</span>
+exportfs<span class="w"> </span>-ra
+
+<span class="c1"># Verify it actually applied</span>
+exportfs<span class="w"> </span>-v<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>async
+<span class="c1"># Should show: /mnt/raid/esxi-import 192.168.0.0/24(rw,wdelay,no_root_squash,no_subtree_check,sec=sys,rw,secure,async,...)</span>
+
+<span class="c1"># If you don&#39;t see &#39;async&#39; in the output, you messed up - fix it before continuing</span>
+</code></pre>
+</div>
+
+<p><strong>⚠️ IMPORTANT: NFS Async Safety Warning</strong></p>
+
+<p>The <code>async</code> mode buffers writes in RAM before writing to disk. This means:</p>
+
+<ul>
+<li><strong>If you lose power during transfer</strong>: Buffered data in RAM is lost</li>
+<li><strong>If the NFS server crashes</strong>: Last few seconds of writes may be lost  </li>
+<li><strong>If network drops</strong>: Transfer stops but no data corruption (just incomplete)</li>
+</ul>
+
+<p><strong>How to mitigate the risk:</strong></p>
+
+<ol>
+<li><strong>Use a UPS (Uninterruptible Power Supply)</strong> on the NFS server - battery backup that keeps server running during power outages</li>
+<li><strong>Don't run other services</strong> on the NFS server during migration</li>
+<li><strong>Verify your copies</strong> with md5sum after transfer completes</li>
+<li><strong>Keep source VMs intact</strong> until you've verified the copies work</li>
+</ol>
+
+<p><strong>Why async is still worth it:</strong></p>
+
+<ul>
+<li>13-24x faster in measured runs (and yes, if you're stuck at ~3-5 MB/s, it'll feel like 20x+)</li>
+<li>Modern Linux buffers are flushed frequently (every 5-30 seconds)</li>
+<li>Risk window is small (seconds, not minutes)</li>
+<li><strong>You're keeping the source anyway</strong> until migration is verified</li>
+</ul>
+
+<p><strong>⚠️ WARNING END</strong></p>
+
+<p><strong>Seriously, check this three times</strong>. I'm not kidding. Print it out. Tattoo it on your arm. Don't skip this.</p>
+
+<h3>Step 1: Verify Your Source Drive Type</h3>
+
+<p>Figure out what you're working with:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># On ESXi</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>core<span class="w"> </span>device<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="s2">&quot;Display Name.*Local&quot;</span>
+
+<span class="c1"># Look for the model number, something like:</span>
+<span class="c1"># - WD4003FRYZ = WD Gold (enterprise, good)</span>
+<span class="c1"># - WD40EFRX = WD Red (NAS-grade, OK)  </span>
+<span class="c1"># - WD10EZEX = WD Blue (desktop, might struggle)</span>
+<span class="c1"># - ST4000DM004 = Seagate Barracuda (consumer, slower)</span>
+</code></pre>
+</div>
+
+<p><strong>If you have an enterprise drive AND proper NFS async</strong>, you can skip the SSD staging. Just migrate directly.</p>
+
+<p><strong>If you have a consumer drive</strong>, SSD staging will help more (might be 2-3x faster instead of just 20%).</p>
+
+<h3>Step 2: (Optional) SSD Staging Setup</h3>
+
+<p>If you decide SSD staging is worth it for your situation:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Verify SSD is big enough BEFORE cloning</span>
+df<span class="w"> </span>-h<span class="w"> </span>/vmfs/volumes/your-source-datastore
+blockdev<span class="w"> </span>--getsize64<span class="w"> </span>/dev/your-ssd-device
+
+<span class="c1"># If SSD &lt; datastore size, STOP and buy a bigger SSD</span>
+<span class="c1"># Don&#39;t ask me how I know this</span>
+</code></pre>
+</div>
+
+<p>Clone VMFS to SSD:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># On Linux server</span>
+dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/source-disk<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/dev/ssd<span class="w"> </span><span class="nv">bs</span><span class="o">=</span>1M<span class="w"> </span><span class="nv">status</span><span class="o">=</span>progress
+<span class="c1"># Or use ddrescue for better error handling</span>
+</code></pre>
+</div>
+
+<p>Resign the cloned VMFS on ESXi:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Check for snapshots requiring signature</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>vmfs<span class="w"> </span>snapshot<span class="w"> </span>list
+
+<span class="c1"># Should show:</span>
+<span class="c1"># Volume Name: datastore-name  </span>
+<span class="c1"># Can resignature: true</span>
+
+<span class="c1"># Mount it with new signature</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>vmfs<span class="w"> </span>snapshot<span class="w"> </span>mount<span class="w"> </span>-l<span class="w"> </span>datastore-name
+
+<span class="c1"># Verify it mounted</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>vmfs<span class="w"> </span>extent<span class="w"> </span>list
+</code></pre>
+</div>
+
+<p><strong>Common issue</strong>: "duplicate extents found" error means you have the same VMFS UUID on multiple disks.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Find which disks have VMFS partitions</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>vmfs<span class="w"> </span>extent<span class="w"> </span>list
+
+<span class="c1"># Wipe the partition table on the disk you DON&#39;T want</span>
+partedUtil<span class="w"> </span>mklabel<span class="w"> </span>/vmfs/devices/disks/t10.WRONG_DISK_ID<span class="w"> </span>gpt
+
+<span class="c1"># Rescan storage</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>core<span class="w"> </span>adapter<span class="w"> </span>rescan<span class="w"> </span>--all
+
+<span class="c1"># Try resignature again</span>
+</code></pre>
+</div>
+
+<h3>Step 3: Mount NFS on ESXi</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># On ESXi</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>nfs<span class="w"> </span>add<span class="w"> </span>-H<span class="w"> </span><span class="m">192</span>.168.0.105<span class="w"> </span>-s<span class="w"> </span>/mnt/raid/esxi-import<span class="w"> </span>-v<span class="w"> </span>migration_target
+
+<span class="c1"># Verify mount</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>nfs<span class="w"> </span>list
+<span class="c1"># Should show: Mounted: true</span>
+
+<span class="c1"># Common mistakes:</span>
+<span class="c1"># - Typo in path (esxi-import vs exsi-import) -&gt; mount denied</span>
+<span class="c1"># - Firewall blocking port 2049 -&gt; timeout</span>
+<span class="c1"># - Wrong subnet in /etc/exports -&gt; permission denied</span>
+</code></pre>
+</div>
+
+<p>Test from another Linux machine first if you're paranoid (you should be):</p>
+
+<div class="codehilite">
+<pre><span></span><code>showmount<span class="w"> </span>-e<span class="w"> </span><span class="m">192</span>.168.0.105
+mount<span class="w"> </span>-t<span class="w"> </span>nfs<span class="w"> </span><span class="m">192</span>.168.0.105:/mnt/raid/esxi-import<span class="w"> </span>/mnt/test
+</code></pre>
+</div>
+
+<h3>Step 4: Migrate VMs</h3>
+
+<p><strong>Consistency rule:</strong> don't copy live disks unless you're deliberately taking that risk. Power the VM off, or copy from a snapshot chain (quiesced if you can). <code>vmkfstools -i</code> is a copier, not a consistency layer.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># For each VM disk</span>
+<span class="nb">time</span><span class="w"> </span>vmkfstools<span class="w"> </span>-i<span class="w"> </span>/vmfs/volumes/source/vm/disk.vmdk<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>thin<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>/vmfs/volumes/migration_target/vm/disk.vmdk
+</code></pre>
+</div>
+
+<p><strong>Why not <code>cp</code> / <code>scp</code> / "download from the datastore browser"?</strong></p>
+
+<p>Those paths often read the <em>logical</em> size of a thin VMDK and write it back out as a fully-allocated file -- i.e., "32 GB provisioned" turns into "32 GB transmitted and stored", even if only ~19 GB was actually allocated. If you care about preserving sparseness (and keeping the migration fast), stick to <code>vmkfstools -i</code> for the copy step.</p>
+
+<p><strong>Expected performance (assuming NFS async is enabled):</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>Source Drive Type</th>
+  <th>Effective Speed</th>
+  <th>Time for 32 GB provisioned (~19 GB allocated, ~41% sparse)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Enterprise HDD</td>
+  <td>80-90 MB/s</td>
+  <td>~4 minutes</td>
+</tr>
+<tr>
+  <td>SSD</td>
+  <td>95-105 MB/s</td>
+  <td>~3 minutes</td>
+</tr>
+<tr>
+  <td>Consumer HDD</td>
+  <td>40-60 MB/s</td>
+  <td>~6-8 minutes</td>
+</tr>
+<tr>
+  <td>Any drive with NFS sync</td>
+  <td>6-12 MB/s</td>
+  <td>up to 2h 50m</td>
+</tr>
+</tbody>
+</table>
+
+<p>If you're seeing 3-5 MB/s, <strong>STOP</strong>. You forgot to enable async or forgot to reload the config. Go back to Step 0.</p>
+
+<h3>Step 5: Validate Copies</h3>
+
+<p>Hash while both datastores are still mounted on ESXi, saving the checksum file to the NFS target alongside the copy. Then you can power down the source and verify cold on the Linux side — no cache ambiguity, no "same mount" shortcut.</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># On ESXi — hash the source flat file, save checksum to NFS target</span>
+md5sum<span class="w"> </span>/vmfs/volumes/source-datastore/vm/disk-flat.vmdk<span class="w"> </span>&gt;<span class="w"> </span>/vmfs/volumes/migration_target/vm/disk-flat.vmdk.md5
+
+<span class="c1"># Power down / unmount source when done with all VMs</span>
+
+<span class="c1"># On Linux — hash the destination flat file and compare against the saved checksum</span>
+md5sum<span class="w"> </span>/mnt/raid/esxi-import/vm/disk-flat.vmdk
+cat<span class="w"> </span>/mnt/raid/esxi-import/vm/disk-flat.vmdk.md5
+<span class="c1"># Both lines should show the same hash</span>
+</code></pre>
+</div>
+
+<p>The .md5 file lives on the NFS share next to the copy, so it travels with the data and doubles as a permanent audit trail.</p>
+
+<p>For large disks, spot-check before committing to a full hash:</p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># First 100MB (on ESXi, against source)</span>
+head<span class="w"> </span>-c<span class="w"> </span>100M<span class="w"> </span>/vmfs/volumes/source-datastore/vm/disk-flat.vmdk<span class="w"> </span><span class="p">|</span><span class="w"> </span>md5sum
+
+<span class="c1"># Same on Linux, against destination</span>
+head<span class="w"> </span>-c<span class="w"> </span>100M<span class="w"> </span>/mnt/raid/esxi-import/vm/disk-flat.vmdk<span class="w"> </span><span class="p">|</span><span class="w"> </span>md5sum
+</code></pre>
+</div>
+
+<hr />
+
+<h2>Troubleshooting: The Checklist</h2>
+
+<p><strong>If migration is slow (&lt; 20 MB/s):</strong></p>
+
+<ol>
+<li>☐ Did you edit <code>/etc/exports</code> to use <code>async</code>?</li>
+<li>☐ Did you run <code>exportfs -ra</code> after editing?</li>
+<li>☐ Did you verify with <code>exportfs -v | grep async</code>?</li>
+<li>☐ Did you restart the NFS client mount on ESXi after changing server config?</li>
+<li>☐ Is your network actually 1G or did someone plug a 100M cable in?</li>
+<li>☐ Are you testing with a tiny VM that fits in cache vs a large one?</li>
+</ol>
+
+<p><strong>If you get "duplicate extents" error:</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># You have the same VMFS UUID on multiple disks</span>
+<span class="c1"># Find the duplicate:</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>vmfs<span class="w"> </span>extent<span class="w"> </span>list
+
+<span class="c1"># Wipe the wrong one:</span>
+partedUtil<span class="w"> </span>mklabel<span class="w"> </span>/vmfs/devices/disks/t10.WRONG_DISK_ID<span class="w"> </span>gpt
+
+<span class="c1"># Rescan and try again</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>core<span class="w"> </span>adapter<span class="w"> </span>rescan<span class="w"> </span>--all
+</code></pre>
+</div>
+
+<p><strong>If NFS mount fails:</strong></p>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Check exports are active</span>
+exportfs<span class="w"> </span>-v<span class="w">  </span>
+
+<span class="c1"># Check firewall isn&#39;t blocking</span>
+iptables<span class="w"> </span>-L<span class="w"> </span>-n<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">2049</span>
+
+<span class="c1"># Test from another Linux machine</span>
+showmount<span class="w"> </span>-e<span class="w"> </span><span class="m">192</span>.168.0.105
+</code></pre>
+</div>
+
+<hr />
+
+<h2>The Economics: Is SSD Staging Worth It?</h2>
+
+<p><strong>My situation:</strong></p>
+
+<ul>
+<li>Cost: $350 for 4TB Samsung 870 QVO</li>
+<li>Time saved: 20% (4 min -> 3 min per VM)</li>
+<li>Actual benefit: Eliminated risk of consumer HDD being slow</li>
+<li>Bonus: I now own a 4TB SSD</li>
+</ul>
+
+<p><strong>When it's worth it:</strong></p>
+
+<ul>
+<li>Large migration (100+ VMs)</li>
+<li>Tight migration window</li>
+<li>Unknown/consumer source drives</li>
+<li>You want guaranteed performance</li>
+<li>You can repurpose the SSD afterward</li>
+</ul>
+
+<p><strong>When it's not worth it:</strong></p>
+
+<ul>
+<li>Small migration (&lt; 10 VMs)</li>
+<li>You have enterprise HDDs</li>
+<li>Tight budget</li>
+<li>Migration can run overnight</li>
+</ul>
+
+<p><strong>The real cost comparison:</strong></p>
+
+<table>
+<thead>
+<tr>
+  <th>Approach</th>
+  <th>Upfront Cost</th>
+  <th>Time Cost</th>
+  <th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>HDD + NFS async</td>
+  <td>$0</td>
+  <td>4 min/VM</td>
+  <td>Medium (depends on HDD quality)</td>
+</tr>
+<tr>
+  <td>SSD staging</td>
+  <td>$350</td>
+  <td>3 min/VM</td>
+  <td>Low (known performance)</td>
+</tr>
+<tr>
+  <td>Forgot NFS async</td>
+  <td>Your sanity</td>
+  <td>100 min/VM</td>
+  <td>Burnout</td>
+</tr>
+</tbody>
+</table>
+
+<hr />
+
+<h2>What About Commercial Migration Tools?</h2>
+
+<p>Veeam, StarWind, VMware Converter - they all do the same thing under the hood:</p>
+
+<ul>
+<li>Read blocks from source VMFS</li>
+<li>Write blocks to destination</li>
+<li>Can't fix physics (NFS sync, slow HDDs, slow network)</li>
+</ul>
+
+<p>They might add:</p>
+
+<ul>
+<li>Pretty progress bars</li>
+<li>Incremental/differential copies  </li>
+<li>Deduplication</li>
+<li>Parallel VM migration</li>
+<li>Your company's money ($$$)</li>
+</ul>
+
+<p>But they won't magically make <code>sync</code> mode fast or turn your WD Blue into a WD Gold.</p>
+
+<p>For a one-time migration, spending $350 on an SSD beats spending $5,000 on Veeam licenses.</p>
+
+<hr />
+
+<h2>The Network Factor</h2>
+
+<p>Both my tests hit network limits:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Test</th>
+  <th>Throughput</th>
+  <th>Network Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>SSD source</td>
+  <td>98 MB/s</td>
+  <td>~784 Mbps (78%)</td>
+</tr>
+<tr>
+  <td>HDD source</td>
+  <td>82 MB/s</td>
+  <td>~656 Mbps (66%)</td>
+</tr>
+</tbody>
+</table>
+
+<p>With a 10G network:</p>
+
+<ul>
+<li>Expected: 200-300 MB/s (destination RAID becomes bottleneck)</li>
+<li>SSD would help more (can deliver 500+ MB/s)</li>
+</ul>
+
+<p><strong>With 25G + NVMe both ends:</strong></p>
+
+<ul>
+<li>Proven: <strong>286 MB/s</strong> (SSD source -> NVMe dest, 25G MTU9000)</li>
+<li>Full data: <a href="benchmark-results.html">benchmark results</a></li>
+</ul>
+
+<p>For 1G networks, the SSD vs HDD difference is muted by network limits.</p>
+
+<hr />
+
+<h2>Lessons Learned (The Hard Way)</h2>
+
+<h3>1. <strong>Configuration mistakes cost more than hardware</strong></h3>
+
+<ul>
+<li>Forgetting <code>exportfs -ra</code>: 13-24x penalty in measured runs (and up to ~27x if you're in the 3-5 MB/s pit)</li>
+<li>Buying an SSD to "fix" it: $350</li>
+<li>Feeling stupid when you realize: Priceless</li>
+</ul>
+
+<h3>2. <strong>Check your assumptions with benchmarks</strong></h3>
+
+<ul>
+<li>"The HDD is too slow" -> Actually fine with proper config</li>
+<li>"I need an SSD" -> Only 20% faster in practice</li>
+<li>"This will take 2 weeks" -> Takes 4 hours with correct setup</li>
+</ul>
+
+<h3>3. <strong>Enterprise hardware has a reason to exist</strong></h3>
+
+<ul>
+<li>WD Gold handled 2,174 IOPS just fine</li>
+<li>Consumer drives would struggle more</li>
+<li>But config matters more than hardware</li>
+</ul>
+
+<h3>4. <strong>Document your changes</strong></h3>
+
+<p>When you edit a config file at 2 AM:</p>
+
+<ul>
+<li>☐ Make the change</li>
+<li>☐ Reload the service</li>
+<li>☐ Verify it applied</li>
+<li>☐ Test it works</li>
+<li>☐ Write down what you did</li>
+</ul>
+
+<p>Skip any step and you'll be buying unnecessary SSDs.</p>
+
+<h3>5. <strong>The checklist is your friend</strong></h3>
+
+<p>Before declaring "the hardware is slow":</p>
+
+<ol>
+<li>Is the config actually loaded?</li>
+<li>Is the service actually restarted?  </li>
+<li>Did I typo the path?</li>
+<li>Is the firewall blocking it?</li>
+<li>Did I test from another machine?</li>
+</ol>
+
+<p>If answer to any is "uh... maybe?", go check.</p>
+
+<hr />
+
+<h2>The Updated Guide Philosophy</h2>
+
+<p><strong>Original plan</strong>: "Buy SSD, use SSD, go fast"</p>
+
+<p><strong>Reality</strong>: "Enable NFS async, double-check you enabled it, triple-check it actually loaded, THEN decide if you need an SSD"</p>
+
+<p>The SSD staging approach is still valid - it eliminates variables and guarantees performance. But it's optimization, not a requirement.</p>
+
+<p>The <strong>requirement</strong> is proper NFS configuration.</p>
+
+<hr />
+
+<h2>Conclusion</h2>
+
+<p>If you take away one thing from this guide:</p>
+
+<p><strong>NFS sync mode will ruin your day, your week, and your migration project.</strong></p>
+
+<p>Enable async. Reload the config. Verify it loaded. Test it works.</p>
+
+<p><em>Then</em> worry about whether you need an SSD.</p>
+
+<p>And if you do buy an SSD for staging, at least you'll actually get the performance you paid for, unlike me who got the same speed from the HDD after fixing the config.</p>
+
+
+<div class="conclusion">
+<p>After a week of experiments, the answer that emerges isn't about hardware — it's about pipeline design. The bottleneck hierarchy is proven and strict. But there's a higher-level observation buried in the tmpfs results: <strong>the destination storage is almost never the real constraint</strong>. You're paying for NVMe write performance that sits at 0.2% utilisation while vmkfstools and your source drive do all the work.</p>
+
+<p>The data points toward a better approach. One where the destination disk drops out of the critical path entirely during the copy phase, and where copy and commit become separate, independently-optimised operations. The throughput numbers in this article — the tmpfs ceiling, the parallelism plateau, the source scan rates — are the inputs to that design.</p>
+
+<p>The full pipeline — copy, detect, convert, verify, commit — can be automated. When it is, migrations that currently require babysitting become fire-and-forget. The benchmarks here tell you what the ceiling looks like. The automation is what gets you there consistently.</p>
+
+<blockquote><p>If you'd rather not build that yourself — get in touch: vlad [at] cipeople [dot] com — this is a solved problem.</p></blockquote>
+</div>
+
+<hr />
+
+<h2>Appendix: The Actual Commands (Copy-Paste Ready)</h2>
+
+<h3>NFS Server Setup</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># /etc/exports</span>
+/mnt/raid/esxi-import<span class="w"> </span><span class="m">192</span>.168.0.0/24<span class="o">(</span>rw,async,no_root_squash,no_subtree_check<span class="o">)</span>
+
+<span class="c1"># Apply changes (DON&#39;T FORGET THIS)</span>
+exportfs<span class="w"> </span>-ra
+
+<span class="c1"># Verify async is enabled (DO THIS TOO)</span>
+exportfs<span class="w"> </span>-v<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>async
+
+<span class="c1"># Start NFS server</span>
+systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>nfs-server
+</code></pre>
+</div>
+
+<h3>ESXi NFS Mount</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Mount NFS</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>nfs<span class="w"> </span>add<span class="w"> </span>-H<span class="w"> </span><span class="m">192</span>.168.0.105<span class="w"> </span>-s<span class="w"> </span>/mnt/raid/esxi-import<span class="w"> </span>-v<span class="w"> </span>migration_target
+
+<span class="c1"># Verify</span>
+esxcli<span class="w"> </span>storage<span class="w"> </span>nfs<span class="w"> </span>list
+</code></pre>
+</div>
+
+<h3>Migrate VM Disk</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Thin provisioning (copies only used blocks)</span>
+vmkfstools<span class="w"> </span>-i<span class="w"> </span>/vmfs/volumes/source/vm/disk.vmdk<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>thin<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>/vmfs/volumes/migration_target/vm/disk.vmdk
+
+<span class="c1"># Thick eager zeroed (faster but uses full space)</span>
+vmkfstools<span class="w"> </span>-i<span class="w"> </span>/vmfs/volumes/source/vm/disk.vmdk<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>eagerzeroedthick<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>/vmfs/volumes/migration_target/vm/disk.vmdk
+</code></pre>
+</div>
+
+<h3>Validate</h3>
+
+<div class="codehilite">
+<pre><span></span><code><span class="c1"># Hash the flat files</span>
+md5sum<span class="w"> </span>/vmfs/volumes/source/vm/disk-flat.vmdk
+md5sum<span class="w"> </span>/vmfs/volumes/migration_target/vm/disk-flat.vmdk
+</code></pre>
+</div>
+
+<hr />
+
+<p><strong>License</strong>: CC0 / Public Domain - do whatever you want with this</p>
+
+<p><strong>Last updated</strong>: February 2026 (and won't be updated again)</p>
+
+<p><strong>Author</strong>: A sysadmin who spent $350 on an SSD to fix a configuration problem, so you don't have to</p>
+
+<p><strong>Disclaimer</strong>: This worked for me. Your mileage may vary. Back up your data. Don't blame me if something breaks. Seriously, back up your data first.</p>
+
+
+<hr />
+
+<h2>P.S. For the Homelab Folks</h2>
+
+<p>Yes, people run desktop HDDs in ESXi servers. I've seen:</p>
+
+<ul>
+<li>"Temporary" repurposed gaming drives (permanent)</li>
+<li>Random WD Blues in whitebox builds  </li>
+<li>Seagate Barracudas "because I had them"</li>
+<li>"It works in my PC" logic</li>
+</ul>
+
+<p>If you're running consumer drives:</p>
+
+<ul>
+<li>NFS async is <strong>mandatory</strong> (not optional)</li>
+<li>SSD staging will help more (maybe 2-3x faster)</li>
+<li>Consider upgrading to WD Red/Red Pro for ~$50 more</li>
+<li>Or just buy a used enterprise drive on eBay for $30</li>
+</ul>
+
+<p>But most importantly: <strong>Check your NFS config three times</strong>.</p>
+
+<p>You're welcome.</p>
+
+</body></html>

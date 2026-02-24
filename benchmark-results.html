@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESXi Migration -- Full 16-Point Benchmark Matrix</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+:root {
+  --bg:#0a0e13;--surface:#111620;--s2:#161d2a;--border:#1e2d42;
+  --cyan:#00d4ff;--orange:#ff6b35;--green:#7cff6b;--yellow:#ffcc00;--red:#ff4455;
+  --text:#c8d8e8;--dim:#4a6080;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;padding:40px 24px}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,212,255,.012) 2px,rgba(0,212,255,.012) 4px);pointer-events:none;z-index:999}
+.wrap{max-width:1200px;margin:0 auto}
+
+header{border-left:3px solid var(--cyan);padding-left:20px;margin-bottom:48px}
+.lbl{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan);letter-spacing:4px;text-transform:uppercase;margin-bottom:8px}
+h1{font-size:clamp(22px,4vw,42px);font-weight:800;line-height:1.1;color:#fff}
+.sub{margin-top:10px;color:var(--dim);font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.9}
+
+.sh{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan);letter-spacing:3px;text-transform:uppercase;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+.sh::after{content:'';flex:1;height:1px;background:var(--border)}
+.sec{margin-bottom:48px}
+
+/* CARDS */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:48px}
+.card{background:var(--surface);border:1px solid var(--border);padding:20px;position:relative}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.c-cyan::before{background:var(--cyan)}.c-orange::before{background:var(--orange)}
+.c-green::before{background:var(--green)}.c-yellow::before{background:var(--yellow)}.c-red::before{background:var(--red)}
+.cn{font-size:42px;font-weight:800;line-height:1;margin-bottom:4px}
+.c-cyan .cn{color:var(--cyan)}.c-orange .cn{color:var(--orange)}
+.c-green .cn{color:var(--green)}.c-yellow .cn{color:var(--yellow)}.c-red .cn{color:var(--red)}
+.cu{font-family:'JetBrains Mono',monospace;font-size:13px;opacity:.6}
+.cl{font-size:11px;color:var(--dim);font-family:'JetBrains Mono',monospace;margin-top:8px;line-height:1.6}
+
+/* TABLE */
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace;font-size:11px}
+th{background:var(--s2);color:var(--cyan);font-size:10px;letter-spacing:2px;text-transform:uppercase;padding:9px 12px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
+th.l{text-align:left}
+td{padding:8px 12px;border-bottom:1px solid rgba(30,45,66,.6);text-align:right;color:var(--text)}
+td.l{text-align:left}
+tr:hover td{background:rgba(0,212,255,.025)}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;padding:2px 7px;font-size:10px;font-weight:700}
+.tssd{background:rgba(0,212,255,.15);color:var(--cyan)}
+.thdd{background:rgba(255,107,53,.15);color:var(--orange)}
+.tnvme{background:rgba(124,255,107,.15);color:var(--green)}
+.t25{background:rgba(0,212,255,.1);color:var(--cyan)}
+.t1{background:rgba(74,96,128,.2);color:var(--dim)}
+.tm9{background:rgba(255,204,0,.1);color:var(--yellow)}
+.tm1{background:rgba(74,96,128,.15);color:var(--dim)}
+.vbest{color:var(--green);font-weight:700}
+.vgood{color:var(--cyan)}
+.vmid{color:var(--yellow)}
+.vbase{color:var(--dim)}
+.vlo{color:var(--dim)}
+
+/* BARS */
+.bars{background:var(--surface);border:1px solid var(--border);padding:24px}
+.brow{display:grid;grid-template-columns:215px 1fr 90px;align-items:center;gap:12px;margin-bottom:8px}
+.blbl{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);text-align:right}
+.btrack{height:22px;background:var(--s2);overflow:hidden}
+.bfill{height:100%}
+.bval{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700}
+.bsep{height:1px;background:var(--border);margin:8px 0;grid-column:1/-1}
+
+/* EFFECTS */
+.effs{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.ecard{background:var(--surface);border:1px solid var(--border);padding:20px}
+.etitle{font-size:13px;font-weight:700;margin-bottom:10px}
+.enote{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);margin-bottom:14px;line-height:1.7}
+.erow{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid rgba(30,45,66,.5);font-family:'JetBrains Mono',monospace;font-size:11px}
+.erow:last-child{border-bottom:none}
+.elbl{color:var(--dim)}.eval{color:#fff}
+
+/* IOPS */
+.ig{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ic{background:var(--surface);border:1px solid var(--border);padding:20px}
+.ic h3{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:14px}
+.ir{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(30,45,66,.5);font-family:'JetBrains Mono',monospace;font-size:11px}
+.ir:last-child{border-bottom:none}
+.in{color:var(--dim)}.iv{color:#fff;font-weight:700}.ino{color:var(--dim);font-size:10px;margin-left:5px}
+
+/* OBS */
+.obs{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.ob{background:var(--surface);border:1px solid var(--border);padding:20px}
+.obtitle{font-size:13px;font-weight:700;margin-bottom:12px}
+.obbody{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);line-height:2}
+
+footer{margin-top:48px;padding-top:24px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);line-height:2}
+@media(max-width:700px){.ig,.obs{grid-template-columns:1fr}.brow{grid-template-columns:120px 1fr 70px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="lbl">// benchmark results -- complete matrix</div>
+  <h1>ESXi VM Migration<br>16-Point Performance Matrix</h1>
+  <div class="sub">
+  naming: esxi_{src}_nfs_{dst}_{nic}_mtu{mtu} -- the folder name is the full test spec, no guessing required<br>
+  same 32 GB provisioned VM (~19 GB allocated; ~41% sparse) · NFS async · vmkfstools thin provisioning · all 2x2x2x2 combinations measured<br>
+  units: MB/GB are binary (MB=2^20 bytes, GB=2^30 bytes) · sizes and throughput are computed on allocated bytes unless stated otherwise<br>  instrumented: esxtop SCSI counters (source reads) + iostat (destination writes)
+  </div>
+</header>
+
+<div class="sh">Key Numbers</div>
+<div class="cards">
+  <div class="card c-green">
+  <div class="cn">3.5<span class="cu">x</span></div>
+  <div class="cl">SSD->NVMe 25G vs HDD->HDD 1G<br>best case vs worst case. proven.</div>
+  </div>
+  <div class="card c-cyan">
+  <div class="cn">290<span class="cu"> MB/s</span></div>
+  <div class="cl">peak: SSD->NVMe 25G MTU9000<br>NVMe sitting at 0.2% utilisation. bored.</div>
+  </div>
+  <div class="card c-orange">
+  <div class="cn">+0.4<span class="cu"> MB/s</span></div>
+  <div class="cl">NVMe vs HDD destination on 1G<br>not a typo. the 1G wall doesn't care.</div>
+  </div>
+  <div class="card c-yellow">
+  <div class="cn">+4<span class="cu">%</span></div>
+  <div class="cl">MTU 9000 vs 1500, everywhere<br>free. consistent. zero excuses not to.</div>
+  </div>
+  <div class="card c-red">
+  <div class="cn">24<span class="cu">x</span></div>
+  <div class="cl">NFS sync penalty -- measured<br>SSD->NVMe 25G: 290->12 MB/s<br>one line in /etc/exports. don't.</div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">Full 16-Test Matrix</div>
+  <div class="tscroll">
+  <table>
+  <thead>
+  <tr>
+  <th class="l">Source<br><span style="font-weight:400;opacity:.6">disk</span></th>
+  <th class="l">Dest<br><span style="font-weight:400;opacity:.6">disk</span></th>
+  <th class="l">NIC<br><span style="font-weight:400;opacity:.6">speed</span></th>
+  <th class="l">MTU<br><span style="font-weight:400;opacity:.6">bytes</span></th>
+  <th>Duration<br><span style="font-weight:400;opacity:.6">m:ss</span></th>
+  <th>Throughput<br><span style="font-weight:400;opacity:.6">MB/s</span></th>
+  <th>vs Baseline<br><span style="font-weight:400;opacity:.6">speed ratio</span></th>
+  <th>Src Read<br><span style="font-weight:400;opacity:.6">IOPS</span></th>
+  <th>Src Read<br><span style="font-weight:400;opacity:.6">MB/s</span></th>
+  <th>Dst Write<br><span style="font-weight:400;opacity:.6">IOPS</span></th>
+  <th>Dst Write<br><span style="font-weight:400;opacity:.6">MB/s</span></th>
+  </tr>
+  </thead>
+  <tbody>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>3m 56s</td><td class="vlo">82.4</td><td class="vbase">baseline</td><td>2,206</td><td>138</td><td>1,211</td><td>89</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>3m 47s</td><td>85.7</td><td class="vbase">1.0x</td><td>2,311</td><td>145</td><td>1,230</td><td>92</td></tr>
+  <tr class="syncrow"><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm1">1500</span> <span class="tag tsync">SYNC</span></td><td class="vsync">2h 49m 58s</td><td class="vsync">6.5</td><td class="vsync">0.1x <span style="font-size:10px;color:#ff4455">⚠</span></td><td>287</td><td>18</td><td>--</td><td>14</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>3m 54s</td><td class="vlo">82.9</td><td class="vbase">1.0x</td><td>2,204</td><td>138</td><td>1,434</td><td>90</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>3m 46s</td><td>85.8</td><td class="vbase">1.0x</td><td>2,304</td><td>144</td><td>1,468</td><td>92</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>2m 56s</td><td>110.2</td><td class="vmid">1.3x</td><td>2,955</td><td>185</td><td>414</td><td>120</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>2m 49s</td><td>114.5</td><td class="vmid">1.4x</td><td>3,044</td><td>190</td><td>443</td><td>128</td></tr>
+  <tr class="syncrow"><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm1">1500</span> <span class="tag tsync">SYNC</span></td><td class="vsync">2h 49m 49s</td><td class="vsync">6.5</td><td class="vsync">0.1x <span style="font-size:10px;color:#ff4455">⚠</span></td><td>278</td><td>17</td><td>--</td><td>9</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>2m 38s</td><td>122.9</td><td class="vmid">1.5x</td><td>3,238</td><td>202</td><td>2,157</td><td>138</td></tr>
+  <tr><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>2m 32s</td><td>127.4</td><td class="vmid">1.5x</td><td>3,349</td><td>209</td><td>2,237</td><td>143</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>3m 18s</td><td>98.1</td><td class="vbase">1.2x</td><td>2,604</td><td>163</td><td>1,375</td><td>101</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>3m 09s</td><td>102.6</td><td class="vbase">1.2x</td><td>2,751</td><td>172</td><td>1,423</td><td>107</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>3m 17s</td><td>98.6</td><td class="vbase">1.2x</td><td>2,594</td><td>162</td><td>1,617</td><td>101</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t1">1G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>3m 08s</td><td>103.0</td><td class="vbase">1.2x</td><td>2,740</td><td>171</td><td>1,707</td><td>107</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>2m 05s</td><td class="vgood">155.1</td><td class="vgood">1.9x</td><td>4,175</td><td>261</td><td>249</td><td>160</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag thdd">HDD</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>2m 03s</td><td class="vgood">157.4</td><td class="vgood">1.9x</td><td>4,184</td><td>262</td><td>247</td><td>160</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm1">1500</span></td><td>1m 08s</td><td class="vbest">285.6</td><td class="vbest">3.5x</td><td>7,164</td><td>448</td><td>4,724</td><td>296</td></tr>
+  <tr><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm9">9000</span></td><td>1m 07s</td><td class="vbest">289.7</td><td class="vbest">3.5x</td><td class="vbest">7,693</td><td class="vbest">481</td><td>4,712</td><td>296</td></tr>
+  <tr class="syncrow"><td class="l"><span class="tag tssd">SSD</span></td><td class="l"><span class="tag tnvme">NVMe</span></td><td class="l"><span class="tag t25">25G</span></td><td class="l"><span class="tag tm9">9000</span> <span class="tag tsync">SYNC</span></td><td class="vsync">26m 21s</td><td class="vsync">12.3</td><td class="vsync">0.1x <span style="font-size:10px;color:#ff4455">⚠</span></td><td>338</td><td>21</td><td>--</td><td>17</td></tr>
+  </tbody>
+  </table>
+  </div>
+  <div style="margin-top:12px;background:rgba(255,68,85,.06);border:1px solid rgba(255,68,85,.2);padding:14px 18px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#c8d8e8;line-height:1.9">
+  <span style="color:#ff4455;font-weight:700">⚠ SYNC rows</span> -- NFS sync mode forces the server to confirm each write to persistent disk before the client can continue.
+  Penalty grows with faster hardware: <span style="color:#ff4455">13x on HDD->HDD 1G · 17x on HDD->HDD 25G · 24x on SSD->NVMe 25G</span>.
+  You built a 290 MB/s pipeline. One config option turns it into 12 MB/s. The faster your stack, the more you lose.
+  Fix: add <code style="color:#7cff6b">async</code> to /etc/exports, run <code style="color:#7cff6b">exportfs -ra</code>. Verify with <code style="color:#7cff6b">exportfs -v | grep async</code>.
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">Throughput at a Glance</div>
+  <div class="bars">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);margin-bottom:20px">sorted by MB/s · bar width proportional to peak (289.7 MB/s)</div>
+  <div class="brow"><div class="blbl">SSD->NVMe 25G MTU9000</div><div class="btrack"><div class="bfill" style="width:100%;background:linear-gradient(90deg,#00d4ff22,#00d4ff)"></div></div><div class="bval vbest">290 MB/s</div></div>
+  <div class="brow"><div class="blbl">SSD->NVMe 25G MTU1500</div><div class="btrack"><div class="bfill" style="width:98.6%;background:linear-gradient(90deg,#00d4ff22,#00d4ff)"></div></div><div class="bval vbest">286 MB/s</div></div>
+  <div class="brow"><div class="bsep"></div></div>
+  <div class="brow"><div class="blbl">SSD->HDD  25G MTU9000</div><div class="btrack"><div class="bfill" style="width:54.3%;background:linear-gradient(90deg,#00aacc22,#00aacc)"></div></div><div class="bval vgood">157 MB/s</div></div>
+  <div class="brow"><div class="blbl">SSD->HDD  25G MTU1500</div><div class="btrack"><div class="bfill" style="width:53.5%;background:linear-gradient(90deg,#00aacc22,#00aacc)"></div></div><div class="bval vgood">155 MB/s</div></div>
+  <div class="brow"><div class="bsep"></div></div>
+  <div class="brow"><div class="blbl">HDD->NVMe 25G MTU9000</div><div class="btrack"><div class="bfill" style="width:44.0%;background:linear-gradient(90deg,#ff6b3522,#ff6b35)"></div></div><div class="bval vmid">127 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->NVMe 25G MTU1500</div><div class="btrack"><div class="bfill" style="width:42.4%;background:linear-gradient(90deg,#ff6b3522,#ff6b35)"></div></div><div class="bval vmid">123 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  25G MTU9000</div><div class="btrack"><div class="bfill" style="width:39.5%;background:linear-gradient(90deg,#cc552222,#cc5522)"></div></div><div class="bval vmid">115 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  25G MTU1500</div><div class="btrack"><div class="bfill" style="width:38.0%;background:linear-gradient(90deg,#cc552222,#cc5522)"></div></div><div class="bval vmid">110 MB/s</div></div>
+  <div class="brow"><div class="bsep"></div></div>
+  <div class="brow"><div class="blbl">SSD->NVMe 1G  MTU9000</div><div class="btrack"><div class="bfill" style="width:35.6%;background:linear-gradient(90deg,#4a608022,#667a90)"></div></div><div class="bval vlo">103 MB/s</div></div>
+  <div class="brow"><div class="blbl">SSD->HDD  1G  MTU9000</div><div class="btrack"><div class="bfill" style="width:35.4%;background:linear-gradient(90deg,#4a608022,#667a90)"></div></div><div class="bval vlo">103 MB/s</div></div>
+  <div class="brow"><div class="blbl">SSD->NVMe 1G  MTU1500</div><div class="btrack"><div class="bfill" style="width:34.1%;background:linear-gradient(90deg,#4a608022,#667a90)"></div></div><div class="bval vlo">99 MB/s</div></div>
+  <div class="brow"><div class="blbl">SSD->HDD  1G  MTU1500</div><div class="btrack"><div class="bfill" style="width:33.9%;background:linear-gradient(90deg,#4a608022,#667a90)"></div></div><div class="bval vlo">98 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->NVMe 1G  MTU9000</div><div class="btrack"><div class="bfill" style="width:29.6%;background:linear-gradient(90deg,#3a506022,#4a6070)"></div></div><div class="bval vlo">86 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  1G  MTU9000</div><div class="btrack"><div class="bfill" style="width:29.6%;background:linear-gradient(90deg,#3a506022,#4a6070)"></div></div><div class="bval vlo">86 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->NVMe 1G  MTU1500</div><div class="btrack"><div class="bfill" style="width:28.6%;background:linear-gradient(90deg,#3a506022,#3a5060)"></div></div><div class="bval vlo">83 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  1G  MTU1500  ← baseline</div><div class="btrack"><div class="bfill" style="width:28.5%;background:linear-gradient(90deg,#3a506022,#3a5060)"></div></div><div class="bval vlo">82 MB/s</div></div>
+  <div class="brow"><div class="bsep" style="background:rgba(255,68,85,.4);margin:14px 0"></div></div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#ff4455;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">⚠ NFS sync mode -- same hardware, async disabled</div>
+  <div class="brow"><div class="blbl">SSD->NVMe 25G MTU9000 SYNC</div><div class="btrack"><div class="bfill" style="width:4.2%;background:linear-gradient(90deg,#ff445522,#ff4455)"></div></div><div class="bval vsync">12.3 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  25G MTU1500 SYNC</div><div class="btrack"><div class="bfill" style="width:2.2%;background:linear-gradient(90deg,#ff445522,#ff4455)"></div></div><div class="bval vsync">6.5 MB/s</div></div>
+  <div class="brow"><div class="blbl">HDD->HDD  1G  MTU1500 SYNC</div><div class="btrack"><div class="bfill" style="width:2.2%;background:linear-gradient(90deg,#ff445522,#ff4455)"></div></div><div class="bval vsync">6.5 MB/s</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">Isolated Variable Effects -- Hard Evidence, No Assumptions</div>
+  <div class="effs">
+
+  <div class="ecard" style="border-left:3px solid var(--yellow)">
+  <div class="etitle">MTU 1500 -> 9000</div>
+  <div class="enote">
+  Squeezing the lemon. Consistent +3-4 MB/s absolute gain across every single combination.<br><br>
+  The % looks better on slower setups -- not because the lemon got juicier, just because the glass was smaller. The absolute improvement is remarkably flat. It's free. Set it on all three hops. There is no reason not to.
+  </div>
+  <div class="erow"><span class="elbl">HDD->HDD 1G</span><span class="eval">+3.3 MB/s <span style="color:var(--yellow)">+4.0%</span></span></div>
+  <div class="erow"><span class="elbl">HDD->NVMe 1G</span><span class="eval">+3.0 MB/s <span style="color:var(--yellow)">+3.6%</span></span></div>
+  <div class="erow"><span class="elbl">SSD->HDD 1G</span><span class="eval">+4.4 MB/s <span style="color:var(--yellow)">+4.5%</span></span></div>
+  <div class="erow"><span class="elbl">SSD->NVMe 1G</span><span class="eval">+4.4 MB/s <span style="color:var(--yellow)">+4.5%</span></span></div>
+  <div class="erow"><span class="elbl">HDD->HDD 25G</span><span class="eval">+4.4 MB/s <span style="color:var(--yellow)">+4.0%</span></span></div>
+  <div class="erow"><span class="elbl">HDD->NVMe 25G</span><span class="eval">+4.5 MB/s <span style="color:var(--yellow)">+3.6%</span></span></div>
+  <div class="erow"><span class="elbl">SSD->HDD 25G</span><span class="eval">+2.2 MB/s <span style="color:var(--dim)">+1.4%</span></span></div>
+  <div class="erow"><span class="elbl">SSD->NVMe 25G</span><span class="eval">+4.2 MB/s <span style="color:var(--dim)">+1.5%</span></span></div>
+  </div>
+
+  <div class="ecard" style="border-left:3px solid var(--orange)">
+  <div class="etitle">HDD -> NVMe destination</div>
+  <div class="enote">
+  On 1G: an expensive paperweight. The 1G ceiling doesn't care what's behind it, and neither should you.<br><br>
+  On 25G + SSD source: +130 MB/s, +84%. Completely different story. NVMe only matters when both the network and source can actually feed it. Upgrade order: network first, then storage.
+  </div>
+  <div class="erow"><span class="elbl">HDD src, 1G, MTU1500</span><span class="eval">+0.4 MB/s <span style="color:var(--dim)">+0.5%</span></span></div>
+  <div class="erow"><span class="elbl">HDD src, 1G, MTU9000</span><span class="eval">+0.1 MB/s <span style="color:var(--dim)">+0.1%</span></span></div>
+  <div class="erow"><span class="elbl">SSD src, 1G, MTU1500</span><span class="eval">+0.5 MB/s <span style="color:var(--dim)">+0.5%</span></span></div>
+  <div class="erow"><span class="elbl">SSD src, 1G, MTU9000</span><span class="eval">+0.4 MB/s <span style="color:var(--dim)">+0.4%</span></span></div>
+  <div class="erow"><span class="elbl">HDD src, 25G, MTU1500</span><span class="eval">+12.7 MB/s <span style="color:var(--yellow)">+11.5%</span></span></div>
+  <div class="erow"><span class="elbl">HDD src, 25G, MTU9000</span><span class="eval">+12.8 MB/s <span style="color:var(--yellow)">+11.2%</span></span></div>
+  <div class="erow"><span class="elbl">SSD src, 25G, MTU1500</span><span class="eval">+130 MB/s <span style="color:var(--green)">+84%</span></span></div>
+  <div class="erow"><span class="elbl">SSD src, 25G, MTU9000</span><span class="eval">+132 MB/s <span style="color:var(--green)">+84%</span></span></div>
+  </div>
+
+  <div class="ecard" style="border-left:3px solid var(--cyan)">
+  <div class="etitle">1G -> 25G network</div>
+  <div class="enote">
+  With HDD source, 25G buys you ~30%. Fine. With SSD+NVMe, 25G is a 3x multiplier. The bigger the pipe, the more the storage quality matters -- there's nothing left to hide behind.
+  </div>
+  <div class="erow"><span class="elbl">HDD->HDD MTU1500</span><span class="eval">82->110 MB/s <span style="color:var(--yellow)">1.3x</span></span></div>
+  <div class="erow"><span class="elbl">HDD->HDD MTU9000</span><span class="eval">86->115 MB/s <span style="color:var(--yellow)">1.3x</span></span></div>
+  <div class="erow"><span class="elbl">HDD->NVMe MTU1500</span><span class="eval">83->123 MB/s <span style="color:var(--yellow)">1.5x</span></span></div>
+  <div class="erow"><span class="elbl">HDD->NVMe MTU9000</span><span class="eval">86->127 MB/s <span style="color:var(--yellow)">1.5x</span></span></div>
+  <div class="erow"><span class="elbl">SSD->HDD MTU1500</span><span class="eval">98->155 MB/s <span style="color:var(--cyan)">1.6x</span></span></div>
+  <div class="erow"><span class="elbl">SSD->HDD MTU9000</span><span class="eval">103->157 MB/s <span style="color:var(--cyan)">1.5x</span></span></div>
+  <div class="erow"><span class="elbl">SSD->NVMe MTU1500</span><span class="eval">99->286 MB/s <span style="color:var(--green)">2.9x</span></span></div>
+  <div class="erow"><span class="elbl">SSD->NVMe MTU9000</span><span class="eval">103->290 MB/s <span style="color:var(--green)">2.8x</span></span></div>
+  </div>
+
+  <div class="ecard" style="border-left:3px solid var(--green)">
+  <div class="etitle">HDD -> SSD source</div>
+  <div class="enote">
+  On 1G: +20%, $350. The SSD's latency advantage (1.5ms vs HDD's 9ms) is completely swamped by the network. On 25G+NVMe: 2.3x. The latency difference finally has room to matter. You bought the right tool -- you just needed the right pipe first.
+  </div>
+  <div class="erow"><span class="elbl">->HDD 1G MTU1500</span><span class="eval">82->98 MB/s <span style="color:var(--dim)">1.2x</span></span></div>
+  <div class="erow"><span class="elbl">->HDD 1G MTU9000</span><span class="eval">86->103 MB/s <span style="color:var(--dim)">1.2x</span></span></div>
+  <div class="erow"><span class="elbl">->NVMe 1G MTU1500</span><span class="eval">83->99 MB/s <span style="color:var(--dim)">1.2x</span></span></div>
+  <div class="erow"><span class="elbl">->NVMe 1G MTU9000</span><span class="eval">86->103 MB/s <span style="color:var(--dim)">1.2x</span></span></div>
+  <div class="erow"><span class="elbl">->HDD 25G MTU1500</span><span class="eval">110->155 MB/s <span style="color:var(--yellow)">1.4x</span></span></div>
+  <div class="erow"><span class="elbl">->HDD 25G MTU9000</span><span class="eval">115->157 MB/s <span style="color:var(--yellow)">1.4x</span></span></div>
+  <div class="erow"><span class="elbl">->NVMe 25G MTU1500</span><span class="eval">123->286 MB/s <span style="color:var(--green)">2.3x</span></span></div>
+  <div class="erow"><span class="elbl">->NVMe 25G MTU9000</span><span class="eval">127->290 MB/s <span style="color:var(--green)">2.3x</span></span></div>
+  </div>
+
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">Raw IOPS -- The Nitty Gritty</div>
+  <div class="ig">
+
+  <div class="ic">
+  <h3>// Source reads -- ESXi esxtop SCSI counters</h3>
+  <div class="ir"><span class="in">HDD / 1G MTU1500</span><span><span class="iv">2,206</span><span class="ino"> · 138 MB/s</span></span></div>
+  <div class="ir"><span class="in">HDD / 1G MTU9000</span><span><span class="iv">2,311</span><span class="ino"> · 145 MB/s</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G->HDD MTU1500</span><span><span class="iv">2,955</span><span class="ino"> · 185 MB/s</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G->HDD MTU9000</span><span><span class="iv">3,044</span><span class="ino"> · 190 MB/s</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G->NVMe MTU1500</span><span><span class="iv">3,238</span><span class="ino"> · 202 MB/s</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G->NVMe MTU9000</span><span><span class="iv">3,349</span><span class="ino"> · 209 MB/s</span></span></div>
+  <div style="height:1px;background:var(--border);margin:10px 0"></div>
+  <div class="ir"><span class="in">SSD / 1G MTU1500</span><span><span class="iv">2,604</span><span class="ino"> · 163 MB/s</span></span></div>
+  <div class="ir"><span class="in">SSD / 1G MTU9000</span><span><span class="iv">2,751</span><span class="ino"> · 172 MB/s</span></span></div>
+  <div class="ir"><span class="in">SSD / 25G->HDD MTU1500</span><span><span class="iv">4,175</span><span class="ino"> · 261 MB/s</span></span></div>
+  <div class="ir"><span class="in">SSD / 25G->HDD MTU9000</span><span><span class="iv">4,184</span><span class="ino"> · 262 MB/s</span></span></div>
+  <div class="ir"><span class="in">SSD / 25G->NVMe MTU1500</span><span><span class="iv" style="color:var(--green)">7,164</span><span class="ino"> · 448 MB/s</span></span></div>
+  <div class="ir"><span class="in">SSD / 25G->NVMe MTU9000</span><span><span class="iv" style="color:var(--green)">7,693</span><span class="ino"> · 481 MB/s</span></span></div>
+  </div>
+
+  <div class="ic">
+  <h3>// Destination writes -- Linux iostat</h3>
+  <div class="ir"><span class="in">HDD / 1G (HDD src)</span><span><span class="iv">1,211</span><span class="ino"> · 89 MB/s · 2.0% util</span></span></div>
+  <div class="ir"><span class="in">HDD / 1G (SSD src)</span><span><span class="iv">1,375</span><span class="ino"> · 101 MB/s · 2.2% util</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G (HDD src)</span><span><span class="iv">414-443</span><span class="ino"> · 120-128 MB/s · 5-6%</span></span></div>
+  <div class="ir"><span class="in">HDD / 25G (SSD src)</span><span><span class="iv">247-249</span><span class="ino"> · 160 MB/s · ~7%</span></span></div>
+  <div style="height:1px;background:var(--border);margin:10px 0"></div>
+  <div class="ir"><span class="in">NVMe / 1G (HDD src)</span><span><span class="iv">1,434-1,468</span><span class="ino"> · 90-92 MB/s · 0.0%</span></span></div>
+  <div class="ir"><span class="in">NVMe / 1G (SSD src)</span><span><span class="iv">1,617-1,707</span><span class="ino"> · 101-107 MB/s · 0.1%</span></span></div>
+  <div class="ir"><span class="in">NVMe / 25G (HDD src)</span><span><span class="iv">2,157-2,237</span><span class="ino"> · 138-143 MB/s · 0.1%</span></span></div>
+  <div class="ir"><span class="in">NVMe / 25G (SSD src)</span><span><span class="iv" style="color:var(--green)">4,712-4,724</span><span class="ino"> · 296 MB/s · <b>0.2%</b></span></span></div>
+  <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);line-height:1.9">
+  NVMe at 0.2% utilisation. 4,700+ IOPS. 296 MB/s written.<br>
+  It could run this workload 500 times over simultaneously.<br>
+  It is not the bottleneck. It will never be the bottleneck.<br>
+  It is simply waiting, with the patience of solid state matter,<br>for someone to send it more data.
+  </div>
+  </div>
+
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">What This Actually Proves</div>
+  <div class="obs">
+  <div class="ob" style="border-left:3px solid var(--red)">
+  <div class="obtitle">The Villain: NFS Sync Mode</div>
+  <div class="obbody">
+  Measured. Not estimated. Not theoretical.<br>
+  HDD->HDD 1G: 6.5 MB/s. <span style="color:#ff4455">13x slower than async.</span><br>
+  HDD->HDD 25G: 6.5 MB/s. <span style="color:#ff4455">17x slower. The NIC doesn't matter.</span><br>
+  SSD->NVMe 25G: 12.3 MB/s. <span style="color:#ff4455">24x slower.</span><br>
+  One line. <code style="color:#ff4455">async</code>. Then <code style="color:#ff4455">exportfs -ra</code>.
+  </div>
+  </div>
+  <div class="ob" style="border-left:3px solid var(--yellow)">
+  <div class="obtitle">MTU 9000: The Consistent Free Lunch</div>
+  <div class="obbody">
+  +3-4 MB/s absolute gain, every combination, no exceptions.<br>
+  ~4% on 1G. ~1.5% on 25G+NVMe.<br>
+  The denominator changed. The lemon did not.<br>
+  Set it on ESXi vmkernel, Linux interface, and any switch in path.<br>
+  Verify: <code style="color:var(--yellow)">ping -s 8972 -M do &lt;target&gt;</code>
+  </div>
+  </div>
+  <div class="ob" style="border-left:3px solid var(--orange)">
+  <div class="obtitle">Destination Disk: Context Is Everything</div>
+  <div class="obbody">
+  On 1G: NVMe vs HDD = +0.4 MB/s. Noise.<br>
+  The 1G network is the wall. Nothing behind it matters.<br>
+  On 25G + SSD source: +130 MB/s. Completely different story.<br>
+  Lesson: don't upgrade the destination in isolation.<br>
+  Upgrade the full stack or don't bother.
+  </div>
+  </div>
+  <div class="ob" style="border-left:3px solid var(--green)">
+  <div class="obtitle">Upgrades Multiply, Not Add</div>
+  <div class="obbody">
+  Each layer unlocks the next.<br>
+  async -> network -> source -> destination.<br>
+  All four together: 82 -> 290 MB/s. 3.5x. Proven.<br>
+  Skip one: you leave the corresponding gain on the table.<br>
+  This is not theory. These are 16 data points.
+  </div>
+  </div>
+  </div>
+</div>
+
+<footer>
+  hardware: WD Gold WD4003FRYZ (HDD src · HDD dst) · Samsung 870 QVO 4TB (SSD src) · nvme0n1 KIOXIA Exceria Pro (NVMe dst)<br>
+  nic: Intel XXV710-DA2 (25G) · onboard 1G · direct DAC cable, no switch in 25G path<br>
+  mtu: configured on ESXi vmkernel + Linux NFS interface · end-to-end verified with ping -s 8972 -M do<br>
+  vm: k8s_master.vmdk · 32 GB provisioned · ~19 GB on disk · ~41% sparse · async unless marked SYNC · vmkfstools -d thin<br>
+  sync rows shown in table: HDD->HDD and SSD->NVMe only · RAM destination excluded (sync on tmpfs is *almost* meaningless -- see advanced doc)
+</footer>
+
+</div>
+</body>
+</html>
