@@ -523,7 +523,7 @@ md5sum /vmfs/volumes/migration_target/vm/disk-flat.vmdk
 
 ---
 
-**License**: CC0 / Public Domain - do whatever you want with this
+**License**: Licence: CC BY 4.0 — free to use with attribution. See LICENCE file.
 
 **Last updated**: February 2026 (and won't be updated again)
 
